@@ -1,0 +1,16 @@
+{
+  "name": "cloudflare_mcp_rosti",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.1",
+    "wrangler": "^4.28.0"
+  }
+}

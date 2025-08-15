@@ -1,0 +1,16 @@
+{
+  "name": "richfairhurst_mcp",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250813.0",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "wrangler": "^4.29.1"
+  }
+}

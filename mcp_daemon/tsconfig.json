@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    // Target + environment
+    "target": "ES2022",
+    "lib": ["ES2022", "WebWorker"],
+
+    // ESM in Workers
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+
+    // Type roots
+    "types": ["@cloudflare/workers-types"],
+
+    // Project ergonomics
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+
+    // Safety & quality
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noPropertyAccessFromIndexSignature": false
+  },
+  "include": ["src"]
+}
+

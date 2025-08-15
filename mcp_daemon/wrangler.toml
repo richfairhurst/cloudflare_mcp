@@ -1,0 +1,8 @@
+name = "richfairhurst_mcp"
+main = "src/index.ts"
+compatibility_date = "2024-11-21"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "KV ID"
+
