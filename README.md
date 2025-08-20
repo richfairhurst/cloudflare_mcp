@@ -13,12 +13,15 @@ This repository contains 3 example implementations:
 1. Personal Daemon / website version - leveraging a KV store to store and retrieve information
 2. API gateway for ORKL
 3. API gateway for ROSTI
+4. Vuln Intel MCP
 
 And helpful utilities:
 
-1. A basic JavaScript template 
-2. A basic Javascript template with KV store pull
-3. A Python script that converts markdown to JSON bulk format for upload to KV Store (which just makes writting source for KV store easier)
+1. A basic JavaScript template
+2. A basic TypeScript template
+3. A basic Javascript template with KV store pull
+4. A TypeScript template with basic authentication
+5. A Python script that converts markdown to JSON bulk format for upload to KV Store (which just makes writting source for KV store easier)
 
 ## Usage Instructions
 
@@ -71,8 +74,6 @@ When you deploy with wrangler deploy it  prints out the URL - it wil be based on
 ```
 
 
-
-
 ### ROSTI
 
 #### Setup and Installation
@@ -122,6 +123,11 @@ ROSTI_API_KEY = "your_api_key_here"
   }
 }
 ```
+
+
+### VULN Intel
+Pulls latest vulnerabilities from vulmon, and then pulls details about the CVE’s from CIRCL.
+Setup and deployment the same as ORKL
 
 
 ### Daemon
