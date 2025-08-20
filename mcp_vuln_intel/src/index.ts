@@ -88,19 +88,36 @@ export default {
     if (method === "tools/list") {
       const toolOutputSchema = {
         type: "object",
-        patternProperties: {
-          "^CVE-\\d{4}-\\d{4,7}$": {
-            type: "object",
-            properties: {
-              summary: { type: "string" },
-              cvss: { type: "string" },
-              severity: { type: "string" },
-              cwe: { type: "string" },
-              published: { type: "string" },
-              references: { type: "array", items: { type: "string", format: "uri" } },
+        properties: {
+          high_critical: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                score: { type: "number" },
+                sev: { type: "string" },
+                published: { type: "string" },
+                ref: { type: "string" },
+                description: { type: "string" },
+              },
             },
-            required: ["summary"],
-            additionalProperties: false,
+          },
+          others: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                score: { type: "number" },
+                sev: { type: "string" },
+                published: { type: "string" },
+                ref: { type: "string" },
+                description: { type: "string" },
+              },
+            },
           },
         },
         additionalProperties: false,
@@ -111,13 +128,10 @@ export default {
           name: "get_latest_vuln_intel",
           title: "Get Latest Vulnerability Intelligence",
           description:
-            "Fetch recent CVE IDs from Vulmon (?q=*&sortby=bydate), then enrich each with CIRCL (CVE JSON 5.x). Returns summary, CVSS, severity, CWE, published, references.",
+            "Fetches all vulnerabilities published in the last 24 hours from the CIRCL CVE API and categorizes them into two buckets: 'high_critical' (CRITICAL and HIGH severity based on CVSS score) and 'others' (MEDIUM, LOW, or unrated). Each vulnerability includes ID, title, CVSS score, severity, publish date, reference URL, and description. Use this tool to get the latest published vulnerabilities with severity-based prioritization.",
           inputSchema: {
             type: "object",
             additionalProperties: false,
-            properties: {
-              limit: { type: "integer", minimum: 1, maximum: 50, default: 10 },
-            },
           },
           outputSchema: toolOutputSchema,
         },
@@ -129,13 +143,9 @@ export default {
     // tools/call -> route to our tool(s)
     if (method === "tools/call") {
       const name = (rpc?.params as any)?.name as string | undefined;
-      const args = ((rpc?.params as any)?.arguments || {}) as Record<string, JSONValue>;
 
       if (name === "get_latest_vuln_intel") {
-        const limitArg = Number.isFinite(args?.limit as number) ? (args?.limit as number) : 10;
-        const limit = Math.min(Math.max(1, limitArg), 50);
-
-        const result = await getLatestVulnIntel(limit);
+        const result = await getLatestVulnIntel();
         return json({ jsonrpc: "2.0", id, result }, cors);
       }
 
@@ -149,98 +159,160 @@ export default {
 
 // ===== Tool implementation =====
 
-async function getLatestVulnIntel(limit: number): Promise<MCPResult> {
-  const vulnmonURL = "https://vulmon.com/searchpage?q=*&sortby=bydate";
+async function getLatestVulnIntel(): Promise<MCPResult> {
+  const circlRecentURL = "https://cve.circl.lu/api/vulnerability/recent";
 
-  const res = await fetch(vulnmonURL);
+  const res = await fetch(circlRecentURL);
   if (!res.ok) {
     return {
-      content: [{ type: "text", text: "Failed to retrieve Vulmon page." }],
+      content: [{ type: "text", text: "Failed to retrieve recent vulnerabilities from CIRCL." }],
     };
   }
 
-  const html = await res.text();
+  const vulnerabilities: any[] = await res.json();
 
-  // Confine to the left-hand column to ignore side recommendations
-  const leftStart = html.indexOf('class="thirteen wide column"');
-  const rightStart = html.indexOf('class="three wide column"');
-  const leftColumn =
-    leftStart >= 0
-      ? html.slice(leftStart, rightStart > leftStart ? rightStart : html.length)
-      : html;
+  // Generate since date (24 hours ago in UTC ISO format)
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  // Extract CVE IDs in order (unique)
-  const cveRegex = /CVE-\d{4}-\d{4,7}/g;
-  const found = leftColumn.match(cveRegex) || [];
-  const seen = new Set<string>();
-  const cveIds: string[] = [];
-  for (const id of found) {
-    if (!seen.has(id)) {
-      seen.add(id);
-      cveIds.push(id);
-    }
-    if (cveIds.length >= limit) break;
-  }
+  // Normalize and filter vulnerabilities
+  const normalized = vulnerabilities
+    .map(normalizeVuln)
+    .filter((v) => v.published && v.published >= since);
 
-  const out: Record<string, JSONValue> = {};
-  for (const cve of cveIds) {
-    const detail = await fetchCirclCve5(cve);
-    if (detail) out[cve] = detail;
-  }
+  // Categorize into buckets
+  const highCritical = normalized
+    .filter((v) => v.sev_norm === "CRITICAL" || v.sev_norm === "HIGH")
+    .sort((a, b) => (b.score - a.score) || (new Date(b.published).getTime() - new Date(a.published).getTime()))
+    .map((v) => ({
+      id: v.cve_id || v.vuln_id,
+      title: v.title,
+      score: v.score,
+      sev: v.sev_norm,
+      published: v.published,
+      ref: v.references?.[0] || null,
+      description: v.description,
+    }));
+
+  const others = normalized
+    .filter((v) => v.sev_norm !== "CRITICAL" && v.sev_norm !== "HIGH")
+    .sort((a, b) => new Date(b.published).getTime() - new Date(a.published).getTime())
+    .map((v) => ({
+      id: v.cve_id || v.vuln_id,
+      title: v.title,
+      score: v.score,
+      sev: v.sev_norm,
+      published: v.published,
+      ref: v.references?.[0] || null,
+      description: v.description,
+    }));
+
+  const result = {
+    high_critical: highCritical,
+    others: others,
+  };
 
   return {
-    content: [{ type: "text", text: `Fetched ${Object.keys(out).length} recent CVEs with structured details.` }],
-    structuredContent: out,
+    content: [{ type: "text", text: `Fetched ${normalized.length} recent CVEs (last 24h) categorized by severity.` }],
+    structuredContent: result,
   };
 }
 
-async function fetchCirclCve5(cveId: string): Promise<JSONValue | null> {
-  const url = `https://cve.circl.lu/api/cve/${cveId}`;
-  try {
-    const r = await fetch(url);
-    if (!r.ok) return null;
+// Helper function to normalize vulnerability data
+function normalizeVuln(vuln: any): any {
+  let vuln_id: string;
+  let cve_id: string | null = null;
+  let title: string | null = null;
+  let cvss: any = null;
+  let description: string | null = null;
+  let references: string[] = [];
+  let published: string | null = null;
+  let updated: string | null = null;
+  let source: string = "CVE_RECORD";
 
-    const data: any = await r.json();
-
-    // Extract summary (CVE 5.x)
-    const cna = data?.containers?.cna;
-    const summary: string =
-      cna?.descriptions?.find((d: any) => d?.lang === "en")?.value ?? "";
-
-    // Prefer CVSS v4, then v3.1, then v3.0
-    const metrics = Array.isArray(cna?.metrics) ? cna.metrics : [];
-    const m4 = metrics.find((m: any) => m?.cvssV4_0)?.cvssV4_0;
-    const m31 = metrics.find((m: any) => m?.cvssV3_1)?.cvssV3_1;
-    const m30 = metrics.find((m: any) => m?.cvssV3_0)?.cvssV3_0;
-
-    const score = m4?.baseScore ?? m31?.baseScore ?? m30?.baseScore ?? null;
-    const severity: string | null =
-      m4?.baseSeverity ?? m31?.baseSeverity ?? m30?.baseSeverity ?? null;
-
-    // CWE
-    const cwe =
-      data?.containers?.cna?.problemTypes?.[0]?.descriptions?.[0]?.cweId ?? "";
-
-    // Published
-    const published: string = data?.cveMetadata?.datePublished ?? "";
-
-    // References
-    const references: string[] = (cna?.references || [])
-      .map((r: any) => r?.url)
-      .filter((u: any) => typeof u === "string");
-
-    return {
-      summary,
-      cvss: score != null ? String(score) : "",
-      severity: severity ?? "",
-      cwe,
-      published,
-      references,
-    };
-  } catch {
-    return null;
+  if (vuln.vulnerabilities) {
+    // Handle vulnerabilities array (e.g., from some sources)
+    const v = vuln.vulnerabilities[0];
+    vuln_id = v.cve || `${vuln.document?.tracking?.id || "unknown"}:${v.ids?.[0] || v.title || "unknown"}`;
+    cve_id = v.cve || null;
+    title = v.title || null;
+    cvss = v.scores?.[0]?.cvss_v4 || v.scores?.[0]?.cvss_v3 || null;
+    description = v.notes?.find((n: any) => n.category === "description")?.text || null;
+    references = [...(v.references?.map((r: any) => r.url) || []), ...(vuln.document?.references?.map((r: any) => r.url) || [])].filter(Boolean);
+    published = vuln.document?.tracking?.initial_release_date || null;
+    updated = vuln.document?.tracking?.current_release_date || null;
+    source = vuln.document?.publisher?.name || "unknown";
+  } else if (vuln.schema_version && vuln.id?.startsWith("GHSA-")) {
+    // Handle GHSA format
+    vuln_id = vuln.id;
+    cve_id = vuln.aliases?.find((a: string) => a.startsWith("CVE-")) || null;
+    title = vuln.summary || null;
+    cvss = { baseScore: parseFloat(vuln.severity?.[0]?.score) || 0, baseSeverity: null };
+    description = vuln.details || null;
+    references = vuln.references?.map((r: any) => r.url) || [];
+    published = vuln.published || null;
+    updated = vuln.modified || null;
+    source = "GHSA";
+  } else {
+    // Standard CVE format
+    vuln_id = vuln.cveMetadata?.cveId || vuln.id || "unknown";
+    cve_id = vuln.cveMetadata?.cveId || null;
+    title = vuln.containers?.cna?.title || vuln.summary || null;
+    cvss = chooseCvss(vuln);
+    description = firstEn(vuln.containers?.cna?.descriptions) || firstEn(vuln.descriptions) || vuln.details || null;
+    references = [...(vuln.containers?.cna?.references?.map((r: any) => r.url) || []), ...(vuln.references?.map((r: any) => r.url) || [])].filter(Boolean);
+    published = vuln.cveMetadata?.datePublished || vuln.published || vuln.publishedAt || null;
+    updated = vuln.cveMetadata?.dateUpdated || vuln.lastModified || vuln.modified || null;
+    source = vuln.containers?.cna?.providerMetadata?.shortName || vuln.sourceIdentifier || "CVE_RECORD";
   }
+
+  // Calculate score and severity
+  const score = cvss?.baseScore || 0;
+  const sev_norm = cvss?.baseSeverity ||
+    (score >= 9 ? "CRITICAL" :
+     score >= 8 ? "HIGH" :
+     score >= 4 ? "MEDIUM" :
+     score > 0 ? "LOW" : null);
+
+  return {
+    vuln_id,
+    cve_id,
+    title,
+    cvss,
+    description,
+    references,
+    published,
+    updated,
+    source,
+    score,
+    sev_norm,
+  };
 }
+
+// Helper to choose CVSS data
+function chooseCvss(vuln: any): any {
+  const cvss4 = vuln.containers?.cna?.metrics?.find((m: any) => m.cvssV4_0)?.cvssV4_0;
+  const cvss40 = vuln.metrics?.cvssMetricV40?.[0]?.cvssData;
+  const cvss31 = vuln.metrics?.cvssMetricV31?.[0]?.cvssData;
+
+  // Prioritize CVSS v4, then v4.0, then v3.1
+  const selectedCvss = cvss4 || cvss40 || cvss31;
+  if (selectedCvss) {
+    return {
+      baseScore: selectedCvss.baseScore || 0,
+      baseSeverity: selectedCvss.baseSeverity || null,
+      vectorString: selectedCvss.vectorString || null,
+    };
+  }
+  return null;
+}
+
+// Helper to get first English description
+function firstEn(descriptions: any[]): string | null {
+  const enDesc = descriptions?.find((d: any) => d?.lang === "en");
+  return enDesc?.value || null;
+}
+
+
 
 // ===== helpers =====
 function json(body: unknown, cors?: Record<string, string>) {
